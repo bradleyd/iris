@@ -1,6 +1,5 @@
 defmodule Iris.Server do
   require Logger
-  alias Iris.Relay
 
   @message_handler Application.get_env(:iris, :message_handler)
 
@@ -8,15 +7,15 @@ defmodule Iris.Server do
     defstruct options: []
   end
 
+  # TODO add docs, refactor io formats to use IO.  Move nested case,try into fucntions
+
   def init(hostname, session_count, _address, options) do
-    Logger.info("options: #{inspect(options)}")
+    Logger.debug("callback options: #{inspect(options)}")
     case session_count > 20 do
       false ->
         banner  = [hostname, " ESMTP Bungadog"]
         options = Keyword.merge(%State{}.options, options)
-        Logger.debug("new options: #{inspect(options)}")
         state   = %State{ %State{} | options: options}
-        Logger.debug("State from init: #{inspect(state)}")
         {:ok, banner, state}
       true ->
         Logger.error("Connection limit exceeded")
@@ -30,14 +29,14 @@ defmodule Iris.Server do
     {:ok, state}
   end
   def handle_HELO(hostname, state) do
-    Logger.warn("HELO from #{hostname}")
+    Logger.debug("HELO from #{hostname}")
     {:ok, 655360, state} # If {ok, State} was returned here, we'd use the default 10mb limit
   end
   def handle_EHLO(<<"invalid">>, _extensions, state) do
     {:error, "554 invalid hostname", state}
   end
   def handle_EHLO(hostname, extensions, state) do
-    Logger.warn("EHELO from #{hostname}")
+    Logger.debug("EHELO from #{hostname}")
     my_extensions = 
       case :proplists.get_value(:auth, state.options, false) do
         true ->
@@ -53,7 +52,7 @@ defmodule Iris.Server do
     {:error, "552 go away", state}
   end
   def handle_MAIL(from, state) do
-    Logger.warn("Mail from #{inspect(from)}")
+    Logger.debug("Mail from #{inspect(from)}")
     # you can accept or reject the FROM address here
     {:ok, state}
   end
@@ -71,7 +70,7 @@ defmodule Iris.Server do
     {:error, "550 No such recipient", state}
   end
   def handle_RCPT(to, state) do
-    Logger.warn("Mail to #{inspect(to)} with state: #{inspect(state)}")
+    Logger.debug("Mail to #{inspect(to)} with state: #{inspect(state)}")
     # you can accept or reject RCPT TO addesses here, one per call
     {:ok, state}
   end
@@ -92,15 +91,12 @@ defmodule Iris.Server do
   end
   def handle_DATA(from, to, data, state) do
     # some kind of unique id
-    #reference = :lists.flatten([:io_lib.format("~2.16.0b", [x]) || <<x>> <= :erlang.md5(:erlang.term_to_binary(unique_id()))])
-    reference = [ :erlang.md5(:erlang.term_to_binary(unique_id())) ]
-    # if RELAY is true, then relay email to email address, else send email data to console
-    Logger.debug("proplist data: #{:proplists.get_value(:relay, state.options, false)}")
-    Logger.debug("proplist data: #{inspect(reference)}")
+    reference = :crypto.hash(:md5, :erlang.term_to_binary(unique_id())) |> Base.encode16(case: :lower)
+    # if RELAY is true, then handle message otherwise send message to standard out
     case :proplists.get_value(:relay, state.options, false) do
       true -> @message_handler.handle(from, to, data)
       false ->
-      Logger.info("message from #{from} -> #{to} queued as #{inspect(reference)}, body length #{byte_size(data)}")
+      Logger.info("message sento to STDOUT. Details: from: #{from}, to: #{to}. Queued as #{inspect(reference)}, body length #{byte_size(data)}")
         case :proplists.get_value(:parse, state.options, false) do
           false -> :ok
           true ->
@@ -109,7 +105,7 @@ defmodule Iris.Server do
               Logger.info("Message decoded successfully!, #{inspect(results)}")
             catch 
               what ->
-                Logger.warn("Message decode FAILED with #{inspect(what)}")
+                Logger.error("Message decode FAILED with #{inspect(what)}")
                 case :proplists.get_value(:dump, state.options, false) do
                   false -> :ok
                   true ->
@@ -143,7 +139,6 @@ defmodule Iris.Server do
     :error
   end
 
-  #  this callback is OPTIONAL
   #  it only gets called if you add STARTTLS to your ESMTP extensions
   def handle_STARTTLS(state) do
     IO.write("TLS Started")
